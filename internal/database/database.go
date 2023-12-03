@@ -8,6 +8,8 @@ import (
 	"os"
 	"sort"
 	"sync"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 const dbFile = "database.json"
@@ -22,13 +24,15 @@ type Chirp struct {
 }
 
 type User struct {
-	ID    int    `json:"id"`
-	Email string `json:"email"`
+	ID       int    `json:"id"`
+	Email    string `json:"email"`
+	Password string `json:"password,omitempty"`
 }
 
 type Schema struct {
-	Chirps map[int]Chirp `json:"chirps"`
-	Users  map[int]User  `json:"users"`
+	Chirps        map[int]Chirp   `json:"chirps"`
+	Users         map[int]User    `json:"users"`
+	RefreshTokens map[string]bool `json:"refresh_tokens"`
 }
 
 func NewDB() DB {
@@ -111,7 +115,7 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 	return chirp, nil
 }
 
-func (db *DB) CreateUser(email string) (User, error) {
+func (db *DB) CreateUser(email string, password string) (User, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -121,9 +125,20 @@ func (db *DB) CreateUser(email string) (User, error) {
 		return User{}, err
 	}
 
-	user := User{
-		ID:    len(schema.Users) + 1,
-		Email: email,
+	user, err := findUserByEmail(schema.Users, email)
+	if err == nil {
+		return User{}, errors.New("user email already exists")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 0)
+	if err != nil {
+		return User{}, errors.New("problem saving password")
+	}
+
+	user = User{
+		ID:       len(schema.Users) + 1,
+		Email:    email,
+		Password: string(hash),
 	}
 
 	schema.Users[user.ID] = user
@@ -134,15 +149,159 @@ func (db *DB) CreateUser(email string) (User, error) {
 		return User{}, err
 	}
 
+	user.Password = ""
 	return user, nil
+}
+
+func (db *DB) UpdateUser(userId int, email string, password string) (User, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	schema, err := readDB()
+	if err != nil {
+		log.Println(err)
+		return User{}, err
+	}
+
+	user, err := findUserById(schema.Users, userId)
+	if err != nil {
+		return User{}, errors.New("user does not exist")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 0)
+	if err != nil {
+		return User{}, errors.New("problem saving password")
+	}
+
+	user = User{
+		ID:       user.ID,
+		Email:    email,
+		Password: string(hash),
+	}
+
+	schema.Users[user.ID] = user
+
+	err = saveDB(schema)
+	if err != nil {
+		log.Println(err)
+		return User{}, err
+	}
+
+	user.Password = ""
+	return user, nil
+}
+
+func (db *DB) Login(email string, password string) (User, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	schema, err := readDB()
+	if err != nil {
+		log.Println(err)
+		return User{}, err
+	}
+
+	user, err := findUserByEmail(schema.Users, email)
+	if err != nil {
+		return User{}, err
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
+	if err != nil {
+		return User{}, errors.New("incorrect credentials")
+	}
+
+	user.Password = ""
+	return user, nil
+}
+
+func (db *DB) SaveRefreshToken(token string) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	schema, err := readDB()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	schema.RefreshTokens[token] = false
+
+	err = saveDB(schema)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
+func (db *DB) CheckRefreshToken(token string) bool {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	schema, err := readDB()
+	if err != nil {
+		log.Println(err)
+		return false
+	}
+
+	revoked, ok := schema.RefreshTokens[token]
+	if revoked || !ok {
+		return false
+	} else {
+		return true
+	}
+}
+
+func (db *DB) RevokeRefreshToken(token string) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	schema, err := readDB()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	schema.RefreshTokens[token] = true
+
+	err = saveDB(schema)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
+func findUserByEmail(users map[int]User, email string) (User, error) {
+	for _, user := range users {
+		if user.Email == email {
+			return user, nil
+		}
+	}
+
+	return User{}, errors.New("user does not exist")
+}
+
+func findUserById(users map[int]User, id int) (User, error) {
+	for _, user := range users {
+		if user.ID == id {
+			return user, nil
+		}
+	}
+
+	return User{}, errors.New("user does not exist")
 }
 
 func readDB() (Schema, error) {
 	_, err := os.Stat(dbFile)
 	if err != nil {
 		return Schema{
-			Chirps: make(map[int]Chirp),
-			Users:  make(map[int]User),
+			Chirps:        map[int]Chirp{},
+			Users:         map[int]User{},
+			RefreshTokens: map[string]bool{},
 		}, nil
 	}
 

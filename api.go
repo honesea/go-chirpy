@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/honesea/go-chirpy/internal/database"
@@ -13,6 +14,7 @@ import (
 type apiConfig struct {
 	fileserverHits int
 	db             database.DB
+	jwtSecret      string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -110,7 +112,8 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	params := parameters{}
@@ -122,11 +125,153 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := cfg.db.CreateUser(params.Email)
+	user, err := cfg.db.CreateUser(params.Email, params.Password)
 	if err != nil {
 		respondWithError(w, 500, "There was a problem creating the user")
 		return
 	}
 
 	respondWithJSON(w, 201, user)
+}
+
+func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	userId, err := authenticate(cfg.jwtSecret, auth)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	params := parameters{}
+	decoder := json.NewDecoder(r.Body)
+	err = decoder.Decode(&params)
+
+	if err != nil {
+		respondWithError(w, 500, "Something went wrong")
+		return
+	}
+
+	user, err := cfg.db.UpdateUser(userId, params.Email, params.Password)
+	if err != nil {
+		respondWithError(w, 500, "There was a problem creating the user")
+		return
+	}
+
+	respondWithJSON(w, 200, user)
+}
+
+func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
+	}
+
+	params := parameters{}
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&params)
+
+	if err != nil {
+		respondWithError(w, 500, "Something went wrong")
+		return
+	}
+
+	user, err := cfg.db.Login(params.Email, params.Password)
+	if err != nil || user == (database.User{}) {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
+	// User successfully authenticated so we can generate access tokens
+	userIdStr := fmt.Sprintf("%v", user.ID)
+	accessToken, accessErr := generateAccessToken(cfg.jwtSecret, userIdStr)
+	refreshToken, refreshErr := generateRefreshToken(cfg.jwtSecret, userIdStr)
+	if accessErr != nil || refreshErr != nil {
+		respondWithError(w, 500, "Could not generate JWT")
+		return
+	}
+
+	err = cfg.db.SaveRefreshToken(refreshToken)
+	if err != nil {
+		respondWithError(w, 500, "Could not save refresh token")
+		return
+	}
+
+	access := struct {
+		ID           int    `json:"id"`
+		Email        string `json:"email"`
+		Token        string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
+	}{
+		ID:           user.ID,
+		Email:        user.Email,
+		Token:        accessToken,
+		RefreshToken: refreshToken,
+	}
+
+	respondWithJSON(w, 200, access)
+}
+
+func (cfg *apiConfig) refresh(w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	userId, err := authenticateRefresh(cfg.jwtSecret, auth)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
+	splitAuth := strings.Split(auth, " ")
+	token := splitAuth[1]
+
+	valid := cfg.db.CheckRefreshToken(token)
+	if !valid {
+		respondWithError(w, 401, "The refresh token is invalid")
+		return
+	}
+
+	userIdStr := fmt.Sprintf("%v", userId)
+	accessToken, err := generateAccessToken(cfg.jwtSecret, userIdStr)
+	if err != nil {
+		respondWithError(w, 500, "Could not generate JWT")
+		return
+	}
+
+	access := struct {
+		Token string `json:"token"`
+	}{
+		Token: accessToken,
+	}
+
+	respondWithJSON(w, 200, access)
+}
+
+func (cfg *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	_, err := authenticateRefresh(cfg.jwtSecret, auth)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
+	splitAuth := strings.Split(auth, " ")
+	token := splitAuth[1]
+
+	err = cfg.db.RevokeRefreshToken(token)
+	if err != nil {
+		respondWithError(w, 500, "There was an issue revoking the refresh token")
+		return
+	}
+
+	access := struct {
+		RevokedToken string `json:"token"`
+	}{
+		RevokedToken: token,
+	}
+
+	respondWithJSON(w, 200, access)
 }
