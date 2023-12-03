@@ -35,6 +35,7 @@ func main() {
 	api.Get("/reset", cfg.reset)
 	api.Get("/chirps", cfg.listChirps)
 	api.Post("/chirps", cfg.createChirp)
+	api.Delete("/chirps/{chirp_id}", cfg.deleteChirp)
 	api.Get("/chirps/{chirp_id}", cfg.readChirp)
 	api.Post("/users", cfg.createUser)
 	api.Put("/users", cfg.updateUser)

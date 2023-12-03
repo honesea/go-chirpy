@@ -19,8 +19,9 @@ type DB struct {
 }
 
 type Chirp struct {
-	ID   int    `json:"id"`
-	Body string `json:"body"`
+	ID       int    `json:"id"`
+	AuthorID int    `json:"author_id"`
+	Body     string `json:"body"`
 }
 
 type User struct {
@@ -89,7 +90,7 @@ func (db *DB) ReadChirp(ID int) (Chirp, error) {
 	return chirp, nil
 }
 
-func (db *DB) CreateChirp(body string) (Chirp, error) {
+func (db *DB) CreateChirp(authorID int, body string) (Chirp, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -100,11 +101,41 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 	}
 
 	chirp := Chirp{
-		ID:   len(schema.Chirps) + 1,
-		Body: body,
+		ID:       len(schema.Chirps) + 1,
+		AuthorID: authorID,
+		Body:     body,
 	}
 
 	schema.Chirps[chirp.ID] = chirp
+
+	err = saveDB(schema)
+	if err != nil {
+		log.Println(err)
+		return Chirp{}, err
+	}
+
+	return chirp, nil
+}
+
+func (db *DB) DeleteChirp(authorID int, chirpID int) (Chirp, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	schema, err := readDB()
+	if err != nil {
+		log.Println(err)
+		return Chirp{}, err
+	}
+
+	chirp, ok := schema.Chirps[chirpID]
+	if !ok {
+		return Chirp{}, errors.New("chirp does not exist")
+	}
+	if chirp.AuthorID != authorID {
+		return Chirp{}, errors.New("invalid author")
+	}
+
+	delete(schema.Chirps, chirpID)
 
 	err = saveDB(schema)
 	if err != nil {

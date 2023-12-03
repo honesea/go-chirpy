@@ -81,13 +81,20 @@ func (cfg *apiConfig) readChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	userId, err := authenticate(cfg.jwtSecret, auth)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
 	type parameters struct {
 		Body string `json:"body"`
 	}
 
 	params := parameters{}
 	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 
 	if err != nil {
 		respondWithError(w, 500, "Something went wrong")
@@ -101,13 +108,38 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 
 	cleanedBody := cleanProfanity(params.Body)
 
-	chirp, err := cfg.db.CreateChirp(cleanedBody)
+	chirp, err := cfg.db.CreateChirp(userId, cleanedBody)
 	if err != nil {
 		respondWithError(w, 500, "There was a problem creating the chirp")
 		return
 	}
 
 	respondWithJSON(w, 201, chirp)
+}
+
+func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	userId, err := authenticate(cfg.jwtSecret, auth)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
+	chirpIDParam := chi.URLParam(r, "chirp_id")
+	chirpID, err := strconv.Atoi(chirpIDParam)
+
+	if err != nil {
+		respondWithError(w, 400, "Chirp ID must be an integer")
+		return
+	}
+
+	chirp, err := cfg.db.DeleteChirp(userId, chirpID)
+	if err != nil {
+		respondWithError(w, 403, "There was a problem deleteing the chirp")
+		return
+	}
+
+	respondWithJSON(w, 200, chirp)
 }
 
 func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
