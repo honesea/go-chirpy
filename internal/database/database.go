@@ -25,9 +25,10 @@ type Chirp struct {
 }
 
 type User struct {
-	ID       int    `json:"id"`
-	Email    string `json:"email"`
-	Password string `json:"password,omitempty"`
+	ID          int    `json:"id"`
+	Email       string `json:"email"`
+	Password    string `json:"password,omitempty"`
+	IsChirpyRed bool   `json:"is_chirpy_red"`
 }
 
 type Schema struct {
@@ -50,7 +51,7 @@ func NewDB() DB {
 	}
 }
 
-func (db *DB) ListChirps() ([]Chirp, error) {
+func (db *DB) ListChirps(authorID int, sortDesc bool) ([]Chirp, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
@@ -62,17 +63,23 @@ func (db *DB) ListChirps() ([]Chirp, error) {
 
 	chirpList := []Chirp{}
 	for _, chirp := range schema.Chirps {
-		chirpList = append(chirpList, chirp)
+		if authorID == 0 || chirp.AuthorID == authorID {
+			chirpList = append(chirpList, chirp)
+		}
 	}
 
 	sort.Slice(chirpList, func(i, j int) bool {
-		return chirpList[i].ID < chirpList[j].ID
+		if sortDesc {
+			return chirpList[i].ID > chirpList[j].ID
+		} else {
+			return chirpList[i].ID < chirpList[j].ID
+		}
 	})
 
 	return chirpList, nil
 }
 
-func (db *DB) ReadChirp(ID int) (Chirp, error) {
+func (db *DB) ReadChirp(chirpID int) (Chirp, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
@@ -82,7 +89,7 @@ func (db *DB) ReadChirp(ID int) (Chirp, error) {
 		return Chirp{}, err
 	}
 
-	chirp, ok := schema.Chirps[ID]
+	chirp, ok := schema.Chirps[chirpID]
 	if !ok {
 		return Chirp{}, nil
 	}
@@ -167,9 +174,10 @@ func (db *DB) CreateUser(email string, password string) (User, error) {
 	}
 
 	user = User{
-		ID:       len(schema.Users) + 1,
-		Email:    email,
-		Password: string(hash),
+		ID:          len(schema.Users) + 1,
+		Email:       email,
+		Password:    string(hash),
+		IsChirpyRed: false,
 	}
 
 	schema.Users[user.ID] = user
@@ -205,9 +213,10 @@ func (db *DB) UpdateUser(userId int, email string, password string) (User, error
 	}
 
 	user = User{
-		ID:       user.ID,
-		Email:    email,
-		Password: string(hash),
+		ID:          user.ID,
+		Email:       email,
+		Password:    string(hash),
+		IsChirpyRed: user.IsChirpyRed,
 	}
 
 	schema.Users[user.ID] = user
@@ -220,6 +229,39 @@ func (db *DB) UpdateUser(userId int, email string, password string) (User, error
 
 	user.Password = ""
 	return user, nil
+}
+
+func (db *DB) ActivateChirpyRed(userId int) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	schema, err := readDB()
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	user, err := findUserById(schema.Users, userId)
+	if err != nil {
+		return errors.New("user does not exist")
+	}
+
+	user = User{
+		ID:          user.ID,
+		Email:       user.Email,
+		Password:    user.Password,
+		IsChirpyRed: true,
+	}
+
+	schema.Users[user.ID] = user
+
+	err = saveDB(schema)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
 }
 
 func (db *DB) Login(email string, password string) (User, error) {

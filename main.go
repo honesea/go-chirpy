@@ -21,8 +21,9 @@ func main() {
 	admin := chi.NewRouter()
 	api := chi.NewRouter()
 	cfg := apiConfig{
-		db:        database.NewDB(),
-		jwtSecret: os.Getenv("JWT_SECRET"),
+		db:          database.NewDB(),
+		jwtSecret:   os.Getenv("JWT_SECRET"),
+		polkaApiKey: os.Getenv("POLKA_API_KEY"),
 	}
 
 	fileServer := cfg.middlewareMetricsInc(http.FileServer(http.Dir(".")))
@@ -42,6 +43,7 @@ func main() {
 	api.Post("/login", cfg.login)
 	api.Post("/refresh", cfg.refresh)
 	api.Post("/revoke", cfg.revoke)
+	api.Post("/polka/webhooks", cfg.polkaWebhook)
 
 	admin.Get("/metrics", cfg.adminMetrics)
 

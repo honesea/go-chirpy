@@ -110,6 +110,21 @@ func authenticateRefresh(jwtSecret string, auth string) (int, error) {
 	return userId, nil
 }
 
+func authenticatePolka(apiKey string, auth string) error {
+	// Split 'Bearer ' from token
+	splitAuth := strings.Split(auth, " ")
+	if len(splitAuth) != 2 {
+		return errors.New("unauthorized")
+	}
+
+	key := splitAuth[1]
+	if key != apiKey {
+		return errors.New("unauthorized")
+	}
+
+	return nil
+}
+
 func respondWithError(w http.ResponseWriter, code int, msg string) {
 	type errorResponse struct {
 		Error string `json:"error"`

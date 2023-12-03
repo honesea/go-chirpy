@@ -15,6 +15,7 @@ type apiConfig struct {
 	fileserverHits int
 	db             database.DB
 	jwtSecret      string
+	polkaApiKey    string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -47,7 +48,19 @@ func (cfg *apiConfig) reset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) listChirps(w http.ResponseWriter, r *http.Request) {
-	chirpList, err := cfg.db.ListChirps()
+	authorIDStr := r.URL.Query().Get("author_id")
+	authorID, err := strconv.Atoi(authorIDStr)
+	if err != nil {
+		authorID = 0
+	}
+
+	sortStr := r.URL.Query().Get("sort")
+	sortDesc := false
+	if sortStr == "desc" {
+		sortDesc = true
+	}
+
+	chirpList, err := cfg.db.ListChirps(authorID, sortDesc)
 	if err != nil {
 		respondWithError(w, 500, "There was a problem retrieving chirps")
 		return
@@ -239,11 +252,13 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		Email        string `json:"email"`
 		Token        string `json:"token"`
 		RefreshToken string `json:"refresh_token"`
+		IsChirpyRed  bool   `json:"is_chirpy_red"`
 	}{
 		ID:           user.ID,
 		Email:        user.Email,
 		Token:        accessToken,
 		RefreshToken: refreshToken,
+		IsChirpyRed:  user.IsChirpyRed,
 	}
 
 	respondWithJSON(w, 200, access)
@@ -306,4 +321,42 @@ func (cfg *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondWithJSON(w, 200, access)
+}
+
+func (cfg *apiConfig) polkaWebhook(w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	err := authenticatePolka(cfg.polkaApiKey, auth)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
+	type parameters struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID int `json:"user_id"`
+		} `json:"data"`
+	}
+
+	params := parameters{}
+	decoder := json.NewDecoder(r.Body)
+	err = decoder.Decode(&params)
+
+	if err != nil {
+		respondWithError(w, 500, "Something went wrong")
+		return
+	}
+
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(200)
+		return
+	}
+
+	err = cfg.db.ActivateChirpyRed(params.Data.UserID)
+	if err != nil {
+		respondWithError(w, 404, "There was a problem deleteing the chirp")
+		return
+	}
+
+	w.WriteHeader(200)
 }
